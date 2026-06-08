@@ -1,0 +1,103 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum FulfillmentType {
+  PICKUP
+  DELIVERY
+}
+
+enum OrderStatus {
+  PENDING
+  PREPARING
+  READY
+  OUT_FOR_DELIVERY
+  DELIVERED
+  CANCELED
+}
+
+model Product {
+  id          String      @id @default(uuid())
+  name        String
+  description String?
+  price       Decimal     @db.Decimal(10, 2)
+  imageUrl    String?
+  isAvailable Boolean     @default(true)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  orderItems  OrderItem[]
+}
+
+model Customer {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  passwordHash String?
+  phone        String?
+  cpf          String?
+  street       String?
+  neighborhood String?
+  city         String?
+  cep          String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  orders       Order[]
+}
+
+model Admin {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  passwordHash String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Order {
+  id              String          @id @default(uuid())
+  customerId      String
+  customer        Customer        @relation(fields: [customerId], references: [id])
+  fulfillmentType FulfillmentType
+  status          OrderStatus     @default(PENDING)
+  street          String?
+  number          String?
+  neighborhood    String?
+  complement      String?
+  deliveryFee     Decimal         @default(0) @db.Decimal(10, 2)
+  subtotal        Decimal         @db.Decimal(10, 2)
+  total           Decimal         @db.Decimal(10, 2)
+  notes           String?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  items           OrderItem[]
+}
+
+model OrderItem {
+  id        String  @id @default(uuid())
+  orderId   String
+  order     Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+  quantity  Int
+  unitPrice Decimal @db.Decimal(10, 2)
+  total     Decimal @db.Decimal(10, 2)
+}
+
+model StoreSetting {
+  id              Int      @id @default(1)
+  storeName       String   @default("Lanchonete do Lucas")
+  hours           String   @default("18:00 - 2:00")
+  address         String   @default("Av. Principal, 123")
+  phone           String   @default("(11) 9999-9999")
+  whatsappNumber  String   @default("5511999999999")
+  pixKey          String   @default("sua-chave-pix-aqui")
+  pixMerchantName String   @default("Lanchonete do Lucas")
+  pixCity         String   @default("Rio de Janeiro")
+  deliveryFee     Decimal  @default(0) @db.Decimal(10, 2)
+  updatedAt       DateTime @updatedAt
+}

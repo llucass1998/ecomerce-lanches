@@ -1,0 +1,9 @@
+ALTER TABLE "StoreSetting"
+ADD COLUMN "storeName" TEXT NOT NULL DEFAULT 'Lanchonete do Lucas',
+ADD COLUMN "hours" TEXT NOT NULL DEFAULT '18:00 - 2:00',
+ADD COLUMN "address" TEXT NOT NULL DEFAULT 'Av. Principal, 123',
+ADD COLUMN "phone" TEXT NOT NULL DEFAULT '(11) 9999-9999',
+ADD COLUMN "whatsappNumber" TEXT NOT NULL DEFAULT '5511999999999',
+ADD COLUMN "pixKey" TEXT NOT NULL DEFAULT 'sua-chave-pix-aqui',
+ADD COLUMN "pixMerchantName" TEXT NOT NULL DEFAULT 'Lanchonete do Lucas',
+ADD COLUMN "pixCity" TEXT NOT NULL DEFAULT 'Rio de Janeiro';
