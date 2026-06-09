@@ -1,11 +1,11 @@
 export const store = {
-  name: "Lanchonete do Lucas",
+  name: "Street Foods",
   hours: '18:00 - 2:00',
   address: 'Av. Principal, 123',
   phone: '(11) 9999-9999',
   whatsappNumber: '5511999999999',
   pixKey: 'sua-chave-pix-aqui',
-  pixMerchantName: 'Lanchonete do Lucas',
+  pixMerchantName: 'Street Foods',
   pixCity: 'Rio de Janeiro'
 };
 

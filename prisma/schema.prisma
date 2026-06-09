@@ -25,6 +25,7 @@ model Product {
   id          String      @id @default(uuid())
   name        String
   description String?
+  category    String      @default("tradicionais")
   price       Decimal     @db.Decimal(10, 2)
   imageUrl    String?
   isAvailable Boolean     @default(true)
@@ -78,25 +79,28 @@ model Order {
 }
 
 model OrderItem {
-  id        String  @id @default(uuid())
-  orderId   String
-  order     Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  productId String
-  product   Product @relation(fields: [productId], references: [id])
-  quantity  Int
-  unitPrice Decimal @db.Decimal(10, 2)
-  total     Decimal @db.Decimal(10, 2)
-}
+    id             String  @id @default(uuid())
+    orderId        String
+    order          Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+    productId      String
+    product        Product @relation(fields: [productId], references: [id])
+    displayName    String?
+    customizations String?
+    imageUrl       String?
+    quantity       Int
+    unitPrice      Decimal @db.Decimal(10, 2)
+    total          Decimal @db.Decimal(10, 2)
+  }
 
 model StoreSetting {
   id              Int      @id @default(1)
-  storeName       String   @default("Lanchonete do Lucas")
+  storeName       String   @default("Street Foods")
   hours           String   @default("18:00 - 2:00")
   address         String   @default("Av. Principal, 123")
   phone           String   @default("(11) 9999-9999")
   whatsappNumber  String   @default("5511999999999")
   pixKey          String   @default("sua-chave-pix-aqui")
-  pixMerchantName String   @default("Lanchonete do Lucas")
+  pixMerchantName String   @default("Street Foods")
   pixCity         String   @default("Rio de Janeiro")
   deliveryFee     Decimal  @default(0) @db.Decimal(10, 2)
   updatedAt       DateTime @updatedAt

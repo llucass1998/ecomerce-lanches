@@ -98,6 +98,9 @@ orderRoutes.post(
     // Aqui vamos montar os itens do pedido e calcular o subtotal.
     const orderItems: Array<{
       productId: string;
+      displayName: string | null;
+      customizations: string | null;
+      imageUrl: string | null;
       quantity: number;
       unitPrice: string;
       total: string;
@@ -107,6 +110,10 @@ orderRoutes.post(
     for (const item of items) {
       const productId = normalizeText(item.productId);
       const itemName = normalizeText(item.name);
+      const itemDisplayName = normalizeText(item.displayName) || itemName || null;
+      const itemCustomizations = normalizeText(item.customizations) || null;
+      const itemCategory = normalizeText(item.category) || 'tradicionais';
+      const itemBasePrice = parseMoney(item.basePrice);
       const itemPrice = parseMoney(item.price);
       const itemImageUrl = normalizeText(item.imageUrl) || null;
       const quantity = Number(item.quantity);
@@ -127,7 +134,8 @@ orderRoutes.post(
           product = await prisma.product.create({
             data: {
               name: itemName,
-              price: itemPrice,
+              category: itemCategory,
+              price: itemBasePrice ?? itemPrice,
               imageUrl: itemImageUrl,
               isAvailable: true,
             },
@@ -145,12 +153,20 @@ orderRoutes.post(
       }
 
       // Calcula o total de cada item: preco unitario x quantidade.
-      const unitPrice = Number(product.price);
+      const baseUnitPrice = Number(product.price);
+      const requestedUnitPrice = itemPrice ? Number(itemPrice) : baseUnitPrice;
+      const unitPrice =
+        Number.isFinite(requestedUnitPrice) && requestedUnitPrice > baseUnitPrice
+          ? requestedUnitPrice
+          : baseUnitPrice;
       const total = unitPrice * quantity;
       subtotal += total;
 
       orderItems.push({
         productId: product.id,
+        displayName: itemDisplayName,
+        customizations: itemCustomizations,
+        imageUrl: itemImageUrl,
         quantity,
         unitPrice: unitPrice.toFixed(2),
         total: total.toFixed(2),

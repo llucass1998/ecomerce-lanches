@@ -1,15 +1,38 @@
-import { ArrowRight, MapPin, Phone, Timer } from 'lucide-react';
-import { categories, getMapsLink, getWhatsappLink, products, store as defaultStore } from '../data/menuData.js';
+import { ArrowRight, Flame, MapPin, Phone, ShoppingCart, Timer } from 'lucide-react';
+import {
+  categories,
+  formatCurrency,
+  getMapsLink,
+  getWhatsappLink,
+  products as fallbackProducts,
+  store as defaultStore
+} from '../data/menuData.js';
 
-function getCategoryImage(categoryId) {
+function getCategoryImage(categoryId, products) {
   return products.find((product) => product.category === categoryId)?.imageUrl;
 }
 
-const featuredImage = getCategoryImage('artesanal') ?? getCategoryImage('tradicionais');
+function getBestSeller(products) {
+  const preferredNames = ['X-Bacon Deluxe', 'X-Burguer Premium', 'Batata Maluca'];
+  const preferredProduct = preferredNames
+    .map((name) =>
+      products.find((product) =>
+        String(product.name ?? '').toLowerCase().includes(name.toLowerCase())
+      )
+    )
+    .find(Boolean);
 
-export default function HomePage({ store = defaultStore }) {
+  return preferredProduct ?? products.find((product) => product.category !== 'bebidas') ?? products[0];
+}
+
+export default function HomePage({
+  products = fallbackProducts,
+  store = defaultStore,
+  onAddToCart,
+}) {
   const mapsLink = getMapsLink(store);
   const whatsappLink = getWhatsappLink(store);
+  const bestSeller = getBestSeller(products);
 
   return (
     <main className="mx-auto max-w-7xl px-4 py-10">
@@ -50,16 +73,52 @@ export default function HomePage({ store = defaultStore }) {
         </p>
       </section>
 
+      {bestSeller ? (
+        <section className="mb-10 overflow-hidden rounded-2xl border-2 border-orange-500 bg-slate-950 text-white shadow-[8px_8px_0_#ea580c]">
+          <div className="grid gap-0 md:grid-cols-[0.9fr_1.1fr]">
+            <div className="flex h-64 items-center justify-center overflow-hidden bg-orange-50 text-7xl md:h-auto">
+              {bestSeller.imageUrl ? (
+                <img
+                  src={bestSeller.imageUrl}
+                  alt={bestSeller.name}
+                  className="h-full w-full object-cover"
+                  loading="lazy"
+                />
+              ) : (
+                <span>{bestSeller.image}</span>
+              )}
+            </div>
+            <div className="flex flex-col justify-center p-6">
+              <div className="mb-4 inline-flex w-fit items-center gap-2 rounded-full bg-orange-600 px-3 py-1 text-xs font-black uppercase tracking-wide">
+                <Flame size={16} />
+                Mais vendido da semana
+              </div>
+              <h2 className="text-3xl font-black uppercase leading-tight">
+                {bestSeller.name}
+              </h2>
+              <p className="mt-3 max-w-xl text-sm text-orange-100">
+                O pedido que mais sai na semana, pronto para entrar no carrinho sem bagunca visual.
+              </p>
+              <div className="mt-5 flex flex-wrap items-center gap-3">
+                <span className="text-2xl font-black text-orange-300">
+                  {formatCurrency(bestSeller.price)}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => onAddToCart?.(bestSeller)}
+                  className="inline-flex items-center gap-2 rounded-xl bg-orange-600 px-5 py-3 font-black text-white shadow-[4px_4px_0_#7c2d12] transition hover:bg-red-600"
+                >
+                  <ShoppingCart size={20} />
+                  Pedir agora
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+      ) : null}
+
       <section className="mb-12">
         <h2 className="mb-6 text-2xl font-bold text-slate-900">Cardápio</h2>
-
-        <div className="mb-8 h-72 overflow-hidden rounded-xl border-4 border-orange-300 bg-orange-100 shadow-xl">
-          <img
-            src={featuredImage}
-            alt="Lanche em destaque"
-            className="h-full w-full object-cover transition duration-300 hover:scale-105"
-          />
-        </div>
 
         <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
           {categories.map((category) => (
@@ -69,9 +128,9 @@ export default function HomePage({ store = defaultStore }) {
               className="group block overflow-hidden rounded-xl border-2 border-orange-100 bg-white transition duration-300 hover:-translate-y-1 hover:border-orange-300 hover:shadow-xl"
             >
               <div className="flex h-56 items-center justify-center overflow-hidden border-b-2 border-orange-100 bg-gradient-to-b from-orange-50 to-orange-100 text-6xl">
-                {getCategoryImage(category.id) ? (
+                {getCategoryImage(category.id, products) ? (
                   <img
-                    src={getCategoryImage(category.id)}
+                    src={getCategoryImage(category.id, products)}
                     alt={category.name}
                     className="h-full w-full object-cover transition duration-300 group-hover:scale-110"
                     loading="lazy"

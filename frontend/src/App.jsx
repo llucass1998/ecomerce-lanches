@@ -13,16 +13,9 @@ import {
 import AccountPage from './pages/AccountPage.jsx';
 import AdminPage from './pages/AdminPage.jsx';
 import CartPage from './pages/CartPage.jsx';
+import CategoryPage from './pages/CategoryPage.jsx';
 import HomePage from './pages/HomePage.jsx';
-import TradicionaisPage from './pages/categories/TradicionaisPage.jsx';
-import BebidasPage from './pages/categories/BebidasPage.jsx';
-import AcaiPage from './pages/categories/AcaiPage.jsx';
-import CombosEspeciaisPage from './pages/categories/CombosEspeciaisPage.jsx';
-import PicanhaPage from './pages/categories/PicanhaPage.jsx';
-import FileDeFrangoPage from './pages/categories/FileDeFrangoPage.jsx';
-import ArtesanalPage from './pages/categories/ArtesanalPage.jsx';
-import PorcoesPage from './pages/categories/PorcoesPage.jsx';
-import MilkshakePage from './pages/categories/MilkshakePage.jsx';
+import streetBurguerLogo from './assets/street-burguer-logo.svg';
 import {
   formatCurrency,
   getStoreFromSettings,
@@ -33,32 +26,45 @@ import {
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000/api';
 const savedCustomerKey = 'ecomerce-lanche-customer';
 const savedThemeKey = 'ecomerce-lanche-theme';
-const defaultCartItems = [1, 29]
-  .map((productId) => products.find((product) => product.id === productId))
-  .filter(Boolean)
-  .map((product) => ({
-    id: product.id,
-    name: product.name,
-    price: product.price,
-    qty: 1,
-    image: product.image,
-    imageUrl: product.imageUrl,
-  }));
+const savedCartKey = 'ecomerce-lanche-cart';
+const addonOptions = [
+  {
+    id: 'extra-fries',
+    name: 'Mais batata frita',
+    price: 1.5,
+  },
+];
+
+function getAddonTotal(addons) {
+  return addons.reduce((total, addon) => total + addon.price, 0);
+}
+
+function getCartItemId(product, addons) {
+  const productId = product.productId ?? product.id;
+  const addonKey = addons.map((addon) => addon.id).sort().join('-') || 'sem-adicional';
+  return `${productId}__${addonKey}`;
+}
+
+function getCustomizationText(addons) {
+  return addons
+    .map((addon) => `${addon.name} (+${formatCurrency(addon.price)})`)
+    .join(', ');
+}
 
 const routes = {
-  '/': HomePage,
-  '/admin': AdminPage,
-  '/conta': AccountPage,
-  '/carrinho': CartPage,
-  '/tradicionais': TradicionaisPage,
-  '/bebidas': BebidasPage,
-  '/acai': AcaiPage,
-  '/combos-especiais': CombosEspeciaisPage,
-  '/picanha': PicanhaPage,
-  '/file-de-frango': FileDeFrangoPage,
-  '/artesanal': ArtesanalPage,
-  '/porcoes': PorcoesPage,
-  '/milkshake': MilkshakePage
+  '/': { Component: HomePage },
+  '/admin': { Component: AdminPage },
+  '/conta': { Component: AccountPage },
+  '/carrinho': { Component: CartPage },
+  '/tradicionais': { Component: CategoryPage, categoryId: 'tradicionais' },
+  '/bebidas': { Component: CategoryPage, categoryId: 'bebidas' },
+  '/acai': { Component: CategoryPage, categoryId: 'acai' },
+  '/combos-especiais': { Component: CategoryPage, categoryId: 'combos' },
+  '/picanha': { Component: CategoryPage, categoryId: 'picanha' },
+  '/file-de-frango': { Component: CategoryPage, categoryId: 'frango' },
+  '/artesanal': { Component: CategoryPage, categoryId: 'artesanal' },
+  '/porcoes': { Component: CategoryPage, categoryId: 'porcoes' },
+  '/milkshake': { Component: CategoryPage, categoryId: 'milkshake' }
 };
 
 function getHashPath() {
@@ -74,6 +80,27 @@ function getInitialDarkMode() {
   }
 
   return window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false;
+}
+
+function getSavedCartItems() {
+  try {
+    const savedCart = JSON.parse(window.localStorage.getItem(savedCartKey) ?? '[]');
+
+    if (!Array.isArray(savedCart)) {
+      return [];
+    }
+
+    return savedCart
+      .map((item) => ({
+        ...item,
+        price: Number(item.price ?? 0),
+        basePrice: Number(item.basePrice ?? item.price ?? 0),
+        qty: Math.max(1, Number(item.qty ?? 1)),
+      }))
+      .filter((item) => item.id && item.name && Number.isFinite(item.price));
+  } catch {
+    return [];
+  }
 }
 
 export default function LanchoneteApp() {
@@ -98,8 +125,11 @@ export default function LanchoneteApp() {
     const savedCustomer = window.localStorage.getItem(savedCustomerKey);
     return savedCustomer ? JSON.parse(savedCustomer) : null;
   });
-  const [cartItems, setCartItems] = useState(defaultCartItems);
+  const [cartItems, setCartItems] = useState(getSavedCartItems);
+  const [catalogProducts, setCatalogProducts] = useState(products);
   const [storeSettings, setStoreSettings] = useState(null);
+  const [productToCustomize, setProductToCustomize] = useState(null);
+  const [selectedAddonIds, setSelectedAddonIds] = useState([]);
 
   const currentStore = useMemo(
     () => getStoreFromSettings(storeSettings ?? store),
@@ -112,6 +142,29 @@ export default function LanchoneteApp() {
   }, [isDarkMode]);
 
   useEffect(() => {
+    const hasSavedCart = Boolean(window.localStorage.getItem(savedCartKey));
+    const isLegacyDemoCart =
+      !hasSavedCart &&
+      cartItems.length === 2 &&
+      cartItems.every((item) =>
+        ['X-Burguer Premium', 'Coca-Cola lata 350ml'].includes(item.name),
+      );
+
+    if (isLegacyDemoCart) {
+      setCartItems([]);
+      window.localStorage.removeItem(savedCartKey);
+      return;
+    }
+
+    if (cartItems.length === 0) {
+      window.localStorage.removeItem(savedCartKey);
+      return;
+    }
+
+    window.localStorage.setItem(savedCartKey, JSON.stringify(cartItems));
+  }, [cartItems]);
+
+  useEffect(() => {
     function handleHashChange() {
       setPath(getHashPath());
       setIsMenuOpen(false);
@@ -121,6 +174,42 @@ export default function LanchoneteApp() {
 
     window.addEventListener('hashchange', handleHashChange);
     return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadCatalogProducts() {
+      try {
+        const response = await fetch(`${API_BASE_URL}/lanches`);
+        const data = await response.json().catch(() => []);
+
+        if (isMounted && response.ok && Array.isArray(data) && data.length > 0) {
+          setCatalogProducts(
+            data
+              .filter((product) => product.isAvailable)
+              .map((product) => ({
+                id: product.id,
+                productId: product.id,
+                name: product.name,
+                category: product.category ?? 'tradicionais',
+                description: product.description ?? '',
+                price: Number(product.price ?? 0),
+                image: '🍔',
+                imageUrl: product.imageUrl,
+              }))
+          );
+        }
+      } catch {
+        // Mantem o cardapio local quando a API ainda nao estiver aberta.
+      }
+    }
+
+    loadCatalogProducts();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -150,8 +239,15 @@ export default function LanchoneteApp() {
     () => cartItems.reduce((sum, item) => sum + item.price * item.qty, 0),
     [cartItems]
   );
+  const selectedAddons = useMemo(
+    () => addonOptions.filter((addon) => selectedAddonIds.includes(addon.id)),
+    [selectedAddonIds]
+  );
+  const customizationBasePrice = Number(productToCustomize?.price ?? 0);
+  const customizationTotal = customizationBasePrice + getAddonTotal(selectedAddons);
 
-  const Page = routes[path] ?? HomePage;
+  const route = routes[path] ?? routes['/'];
+  const Page = route.Component;
   const isLoggedIn = Boolean(currentCustomer);
 
   function openAuthModal(mode = 'login') {
@@ -249,27 +345,59 @@ export default function LanchoneteApp() {
   }
 
   function addToCart(product) {
+    setProductToCustomize(product);
+    setSelectedAddonIds([]);
+  }
+
+  function toggleAddon(addonId) {
+    setSelectedAddonIds((currentIds) =>
+      currentIds.includes(addonId)
+        ? currentIds.filter((id) => id !== addonId)
+        : [...currentIds, addonId]
+    );
+  }
+
+  function closeCustomizationModal() {
+    setProductToCustomize(null);
+    setSelectedAddonIds([]);
+  }
+
+  function confirmAddToCart() {
+    if (!productToCustomize) {
+      return;
+    }
+
+    const itemId = getCartItemId(productToCustomize, selectedAddons);
+    const customizations = getCustomizationText(selectedAddons);
+
     setCartItems((items) => {
-      const existingItem = items.find((item) => item.id === product.id);
+      const existingItem = items.find((item) => item.id === itemId);
 
       if (existingItem) {
         return items.map((item) =>
-          item.id === product.id ? { ...item, qty: item.qty + 1 } : item
+          item.id === itemId ? { ...item, qty: item.qty + 1 } : item
         );
       }
 
       return [
         ...items,
         {
-          id: product.id,
-          name: product.name,
-          price: product.price,
+          id: itemId,
+          productId: productToCustomize.productId ?? productToCustomize.id,
+          name: productToCustomize.name,
+          basePrice: productToCustomize.price,
+          price: customizationTotal,
           qty: 1,
-          image: product.image,
-          imageUrl: product.imageUrl,
+          category: productToCustomize.category,
+          image: productToCustomize.image,
+          imageUrl: productToCustomize.imageUrl,
+          addons: selectedAddons,
+          customizations,
         },
       ];
     });
+
+    closeCustomizationModal();
   }
 
   function updateCartItemQuantity(itemId, nextQuantity) {
@@ -288,6 +416,7 @@ export default function LanchoneteApp() {
 
   function handleOrderCreated(order) {
     setCartItems([]);
+    window.localStorage.removeItem(savedCartKey);
 
     if (!currentCustomer) {
       return;
@@ -306,11 +435,15 @@ export default function LanchoneteApp() {
     <div className="min-h-screen bg-gradient-to-br from-orange-50 via-amber-50 to-red-50">
       <header className="sticky top-0 z-50 border-b-4 border-orange-600 bg-gradient-to-r from-orange-500 to-red-600">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-4">
-          <a href="#/" className="flex items-center gap-2">
-            <div className="text-3xl" aria-hidden="true">
-              🍔
+          <a href="#/" className="flex items-center gap-3">
+            <img
+              src={streetBurguerLogo}
+              alt="Street Foods"
+              className="h-12 w-12 rounded-full bg-slate-950 shadow-[3px_3px_0_#111827]"
+            />
+            <div className="text-xl font-black uppercase leading-none text-white sm:text-2xl">
+              {currentStore.name}
             </div>
-            <div className="text-xl font-bold text-white sm:text-2xl">{currentStore.name}</div>
           </a>
 
           <button
@@ -347,7 +480,7 @@ export default function LanchoneteApp() {
               </a>
             </div>
 
-            <div className="group relative">
+            <div className="relative">
               <a
                 href="#/carrinho"
                 className="relative flex h-12 w-full items-center justify-center rounded-lg bg-orange-50 text-orange-600 transition hover:shadow-lg md:w-12 md:rounded-full md:bg-white"
@@ -360,43 +493,6 @@ export default function LanchoneteApp() {
                   </span>
                 )}
               </a>
-
-              <div className="invisible absolute right-0 top-14 z-50 w-72 rounded-lg border-2 border-orange-200 bg-white p-4 opacity-0 shadow-2xl transition group-hover:visible group-hover:opacity-100">
-                <h3 className="mb-3 font-bold text-orange-600">Seu Pedido</h3>
-                {cartItems.length === 0 ? (
-                  <p className="text-sm text-slate-600">Carrinho vazio</p>
-                ) : (
-                  <>
-                    <div className="mb-3 max-h-48 space-y-2 overflow-y-auto">
-                      {cartItems.map((item) => (
-                        <div
-                          key={item.id}
-                          className="flex justify-between gap-3 border-b border-orange-100 pb-2 text-sm"
-                        >
-                          <span className="text-slate-700">
-                            {item.name} x{item.qty}
-                          </span>
-                          <span className="font-bold text-orange-600">
-                            {formatCurrency(item.price * item.qty)}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                    <div className="mb-3 border-t-2 border-orange-200 pt-3">
-                      <div className="flex justify-between font-bold text-orange-600">
-                        <span>Total:</span>
-                        <span>{formatCurrency(cartTotal)}</span>
-                      </div>
-                    </div>
-                    <a
-                      href="#/carrinho"
-                      className="block w-full rounded-lg bg-gradient-to-r from-orange-500 to-red-600 py-2 text-center text-sm font-bold text-white transition hover:shadow-lg"
-                    >
-                      Finalizar pedido
-                    </a>
-                  </>
-                )}
-              </div>
             </div>
 
             {isLoggedIn ? (
@@ -445,11 +541,13 @@ export default function LanchoneteApp() {
       </header>
 
       <Page
+        categoryId={route.categoryId}
         isLoggedIn={isLoggedIn}
         customer={currentCustomer}
         apiBaseUrl={API_BASE_URL}
         store={currentStore}
         storeSettings={storeSettings}
+        products={catalogProducts}
         cartItems={cartItems}
         cartTotal={cartTotal}
         onAddToCart={addToCart}
@@ -460,6 +558,85 @@ export default function LanchoneteApp() {
         onOrderCreated={handleOrderCreated}
         onStoreSettingsChange={setStoreSettings}
       />
+
+      {productToCustomize && (
+        <div className="fixed inset-0 z-[210] flex items-center justify-center bg-black/60 p-4">
+          <section className="w-full max-w-md overflow-hidden rounded-xl border-2 border-orange-300 bg-white shadow-2xl">
+            <div className="flex items-start gap-4 border-b border-orange-100 p-4">
+              <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-orange-50 text-4xl">
+                {productToCustomize.imageUrl ? (
+                  <img
+                    src={productToCustomize.imageUrl}
+                    alt={productToCustomize.name}
+                    className="h-full w-full object-cover"
+                  />
+                ) : (
+                  <span>{productToCustomize.image}</span>
+                )}
+              </div>
+              <div className="min-w-0 flex-1">
+                <h2 className="text-xl font-black text-slate-900">
+                  {productToCustomize.name}
+                </h2>
+                <p className="mt-1 text-sm text-slate-600">
+                  Escolha os adicionais antes de colocar no carrinho.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeCustomizationModal}
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-600 transition hover:bg-red-50 hover:text-red-600"
+                aria-label="Fechar adicionais"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="space-y-3 p-4">
+              <div className="rounded-lg border border-orange-100 bg-orange-50 p-3">
+                <div className="flex items-center justify-between text-sm font-bold text-slate-700">
+                  <span>Preco base</span>
+                  <span>{formatCurrency(customizationBasePrice)}</span>
+                </div>
+              </div>
+
+              {addonOptions.map((addon) => (
+                <label
+                  key={addon.id}
+                  className="flex cursor-pointer items-center justify-between gap-4 rounded-lg border-2 border-orange-100 bg-white p-3 transition hover:border-orange-300 hover:bg-orange-50"
+                >
+                  <span className="flex items-center gap-3">
+                    <input
+                      type="checkbox"
+                      checked={selectedAddonIds.includes(addon.id)}
+                      onChange={() => toggleAddon(addon.id)}
+                      className="h-4 w-4 accent-orange-600"
+                    />
+                    <span className="font-bold text-slate-800">{addon.name}</span>
+                  </span>
+                  <span className="font-black text-orange-600">
+                    + {formatCurrency(addon.price)}
+                  </span>
+                </label>
+              ))}
+
+              <div className="flex items-center justify-between border-t border-orange-100 pt-4 text-lg font-black text-slate-900">
+                <span>Total do item</span>
+                <span className="text-orange-600">{formatCurrency(customizationTotal)}</span>
+              </div>
+
+              <button
+                type="button"
+                onClick={confirmAddToCart}
+                className="flex w-full items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-orange-500 to-red-600 py-3 font-black text-white transition hover:shadow-lg"
+              >
+                <ShoppingCart size={20} />
+                Adicionar ao carrinho
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
 
       {showLoginModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">

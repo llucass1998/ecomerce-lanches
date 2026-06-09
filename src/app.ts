@@ -16,8 +16,9 @@ export const app = express();
 // Libera o acesso da API para o front-end.
 app.use(cors());
 
-// Permite receber JSON no corpo das requisicoes.
-app.use(express.json());
+// Permite receber JSON no corpo das requisicoes, incluindo imagens compactadas dos produtos.
+app.use(express.json({ limit: '6mb' }));
+app.use(express.urlencoded({ extended: true, limit: '6mb' }));
 
 // Todas essas rotas comecam com /api.
 app.use(

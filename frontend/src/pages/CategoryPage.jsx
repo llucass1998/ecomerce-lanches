@@ -1,9 +1,15 @@
 import { ArrowLeft, ShoppingCart } from 'lucide-react';
-import { formatCurrency, getCategory, getProductsByCategory } from '../data/menuData.js';
+import {
+  formatCurrency,
+  getCategory,
+  getProductsByCategory
+} from '../data/menuData.js';
 
-export default function CategoryPage({ categoryId, onAddToCart }) {
+export default function CategoryPage({ categoryId, onAddToCart, products: catalogProducts }) {
   const category = getCategory(categoryId);
-  const products = getProductsByCategory(categoryId);
+  const products =
+    catalogProducts?.filter((product) => product.category === categoryId) ??
+    getProductsByCategory(categoryId);
   const categoryImageUrl = products[0]?.imageUrl;
 
   if (!category) {
@@ -45,7 +51,11 @@ export default function CategoryPage({ categoryId, onAddToCart }) {
       </section>
 
       <section className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
-        {products.map((product) => (
+        {products.length === 0 ? (
+          <div className="rounded-xl border-2 border-dashed border-orange-200 bg-white p-8 text-center text-slate-600 md:col-span-2 lg:col-span-3">
+            Nenhum produto disponivel nesta categoria.
+          </div>
+        ) : products.map((product) => (
           <article
             key={product.id}
             className="group block overflow-hidden rounded-xl border-2 border-orange-100 bg-white transition duration-300 hover:-translate-y-1 hover:border-orange-300 hover:shadow-xl"

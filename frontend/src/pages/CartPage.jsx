@@ -12,7 +12,7 @@ import {
   Trash2,
   Truck
 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { formatCurrency, store as defaultStore } from '../data/menuData.js';
 
 const savedOrdersKey = 'ecomerce-lanche-orders';
@@ -258,6 +258,10 @@ function getOrderStatusLabel(status) {
   return 'EM ANDAMENTO';
 }
 
+function isFinishedOrder(status) {
+  return status === 'DELIVERED' || status === 'CANCELED';
+}
+
 function getTrackingIndex(status, fulfillmentType) {
   if (status === 'DELIVERED') {
     return 3;
@@ -283,9 +287,10 @@ function normalizeOrder(order, fallbackItems, fallbackTotal) {
   const items =
     order?.items?.map((item) => ({
       id: item.id,
-      name: item.product?.name ?? item.name ?? 'Item do pedido',
+      name: item.displayName ?? item.product?.name ?? item.name ?? 'Item do pedido',
       image: item.product?.image ?? item.image ?? '',
-      imageUrl: item.product?.imageUrl ?? item.imageUrl ?? null,
+      imageUrl: item.imageUrl ?? item.product?.imageUrl ?? null,
+      customizations: item.customizations ?? '',
       quantity: item.quantity,
       total: Number(item.total ?? 0),
     })) ??
@@ -294,6 +299,7 @@ function normalizeOrder(order, fallbackItems, fallbackTotal) {
       name: item.name,
       image: item.image,
       imageUrl: item.imageUrl,
+      customizations: item.customizations ?? '',
       quantity: item.qty,
       total: item.price * item.qty,
     }));
@@ -321,7 +327,9 @@ export default function CartPage({
   onUpdateCartItemQuantity,
 }) {
   const [orders, setOrders] = useState(getSavedOrders);
-  const [lastOrder, setLastOrder] = useState(orders[0] ?? null);
+  const [lastOrder, setLastOrder] = useState(
+    () => getSavedOrders().find((order) => !isFinishedOrder(order.status)) ?? null,
+  );
   const [fulfillmentType, setFulfillmentType] = useState('DELIVERY');
   const [customerName, setCustomerName] = useState(customer?.name ?? '');
   const [customerEmail, setCustomerEmail] = useState(customer?.email ?? '');
@@ -448,6 +456,10 @@ export default function CartPage({
       items: cartItems.map((item) => ({
         productId: String(item.productId ?? item.id),
         name: item.name,
+        displayName: item.name,
+        category: item.category,
+        customizations: item.customizations,
+        basePrice: item.basePrice ?? item.price,
         imageUrl: item.imageUrl,
         price: item.price,
         quantity: item.qty,
@@ -488,35 +500,84 @@ export default function CartPage({
     }
   }
 
-  async function refreshLastOrder() {
-    if (!lastOrder?.id) {
+  async function refreshLastOrder(orderId = lastOrder?.id, options = {}) {
+    if (!orderId) {
       return;
     }
 
     try {
-      setError('');
-      const response = await fetch(`${apiBaseUrl}/pedidos/${lastOrder.id}`);
+      if (!options.silent) {
+        setError('');
+      }
+
+      const response = await fetch(`${apiBaseUrl}/pedidos/${orderId}?_=${Date.now()}`, {
+        cache: 'no-store',
+      });
       const data = await response.json().catch(() => ({}));
 
       if (!response.ok) {
         throw new Error(data.message ?? 'Não foi possível atualizar o pedido.');
       }
 
-      const refreshedOrder = normalizeOrder(data, [], data.total ?? lastOrder.total);
-      const nextOrders = orders.map((order) =>
-        order.id === refreshedOrder.id ? refreshedOrder : order
-      );
+      const refreshedOrder = normalizeOrder(data, [], data.total ?? lastOrder?.total ?? 0);
 
-      setLastOrder(refreshedOrder);
-      setOrders(nextOrders);
-      window.localStorage.setItem(savedOrdersKey, JSON.stringify(nextOrders));
+      setLastOrder(isFinishedOrder(refreshedOrder.status) ? null : refreshedOrder);
+      setOrders((currentOrders) => {
+        const hasOrder = currentOrders.some((order) => order.id === refreshedOrder.id);
+        const nextOrders = hasOrder
+          ? currentOrders.map((order) =>
+              order.id === refreshedOrder.id ? refreshedOrder : order
+            )
+          : [refreshedOrder, ...currentOrders];
+
+        window.localStorage.setItem(savedOrdersKey, JSON.stringify(nextOrders));
+        return nextOrders;
+      });
     } catch (requestError) {
-      setError(
+      if (!options.silent) {
+        setError(
         requestError instanceof Error
           ? requestError.message
           : 'Não foi possível atualizar o pedido.'
-      );
+        );
+      }
     }
+  }
+
+  useEffect(() => {
+    if (!lastOrder?.id) {
+      return undefined;
+    }
+
+    const intervalId = window.setInterval(() => {
+      refreshLastOrder(lastOrder.id, { silent: true });
+    }, 6000);
+
+    return () => window.clearInterval(intervalId);
+  }, [lastOrder?.id, apiBaseUrl]);
+
+  function removeSavedOrder(orderId) {
+    setOrders((currentOrders) => {
+      const nextOrders = currentOrders.filter((order) => order.id !== orderId);
+
+      if (nextOrders.length === 0) {
+        window.localStorage.removeItem(savedOrdersKey);
+      } else {
+        window.localStorage.setItem(savedOrdersKey, JSON.stringify(nextOrders));
+      }
+
+      return nextOrders;
+    });
+
+    if (lastOrder?.id === orderId) {
+      setLastOrder(null);
+    }
+  }
+
+  function clearSavedOrders() {
+    setOrders([]);
+    setLastOrder(null);
+    window.localStorage.removeItem(savedOrdersKey);
   }
 
   return (
@@ -573,6 +634,11 @@ export default function CartPage({
 
                 <div>
                   <h2 className="font-bold text-slate-900">{item.name}</h2>
+                  {item.customizations ? (
+                    <p className="mt-1 text-sm font-semibold text-orange-700">
+                      {item.customizations}
+                    </p>
+                  ) : null}
                   <p className="text-sm text-slate-600">
                     {formatCurrency(item.price)} cada
                   </p>
@@ -929,7 +995,7 @@ export default function CartPage({
                       </p>
                     </div>
                     <button
-                      onClick={refreshLastOrder}
+                      onClick={() => refreshLastOrder()}
                       className="rounded-lg bg-orange-50 px-3 py-2 text-sm font-bold text-orange-700 transition hover:bg-orange-100"
                       type="button"
                     >
@@ -1005,7 +1071,12 @@ export default function CartPage({
                             )}
                           </span>
                           <span>
-                            {item.name} x{item.quantity}
+                            <span className="block">{item.name} x{item.quantity}</span>
+                            {item.customizations ? (
+                              <span className="block text-xs font-semibold text-orange-700">
+                                {item.customizations}
+                              </span>
+                            ) : null}
                           </span>
                         </span>
                         <span className="font-semibold">{formatCurrency(item.total)}</span>
@@ -1020,7 +1091,7 @@ export default function CartPage({
               </>
             ) : (
               <p className="rounded-lg bg-orange-50 p-4 text-slate-600">
-                Finalize um pedido para acompanhar o andamento por aqui.
+                Nenhum pedido em andamento agora. Pedidos finalizados ficam no historico abaixo.
               </p>
             )}
           </div>
@@ -1060,19 +1131,32 @@ export default function CartPage({
           )}
 
           <div className="rounded-xl border-2 border-orange-100 bg-white p-5">
-            <h2 className="mb-5 text-xl font-bold text-slate-900">Pedidos feitos</h2>
+            <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="text-xl font-bold text-slate-900">Pedidos feitos</h2>
+                <p className="text-sm text-slate-500">Historico salvo neste navegador.</p>
+              </div>
+              {orders.length > 0 ? (
+                <button
+                  type="button"
+                  onClick={clearSavedOrders}
+                  className="inline-flex items-center justify-center gap-2 rounded-lg bg-red-50 px-3 py-2 text-sm font-bold text-red-700 transition hover:bg-red-600 hover:text-white"
+                >
+                  <Trash2 size={16} />
+                  Limpar historico
+                </button>
+              ) : null}
+            </div>
             {orders.length === 0 ? (
               <p className="rounded-lg bg-orange-50 p-4 text-slate-600">
-                Nenhum pedido finalizado ainda.
+                Nenhum pedido feito ainda.
               </p>
             ) : (
               <div className="space-y-3">
                 {orders.map((order) => (
-                  <button
+                  <article
                     key={order.id}
-                    onClick={() => setLastOrder(order)}
-                    className="w-full rounded-xl border border-orange-100 bg-orange-50 p-4 text-left transition hover:border-orange-300 hover:bg-orange-100"
-                    type="button"
+                    className="rounded-xl border border-orange-100 bg-orange-50 p-4 transition hover:border-orange-300 hover:bg-orange-100"
                   >
                     <div className="flex items-center justify-between gap-4">
                       <div className="min-w-0">
@@ -1106,10 +1190,32 @@ export default function CartPage({
                         ))}
                       </div>
                     </div>
-                    <p className="mt-3 font-bold text-orange-600">
-                      {formatCurrency(order.total)}
-                    </p>
-                  </button>
+                    <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+                      <p className="font-bold text-orange-600">
+                        {formatCurrency(order.total)}
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setLastOrder(isFinishedOrder(order.status) ? null : order);
+                            refreshLastOrder(order.id, { silent: true });
+                          }}
+                          className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-bold text-white transition hover:bg-orange-600"
+                        >
+                          Ver detalhes
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => removeSavedOrder(order.id)}
+                          className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-sm font-bold text-red-700 transition hover:bg-red-600 hover:text-white"
+                        >
+                          <Trash2 size={15} />
+                          Remover
+                        </button>
+                      </div>
+                    </div>
+                  </article>
                 ))}
               </div>
             )}

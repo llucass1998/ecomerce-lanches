@@ -1,19 +1,25 @@
 import {
+  AlertTriangle,
   ArrowLeft,
   CheckCircle2,
   ClipboardList,
+  ImagePlus,
   LogOut,
   PackagePlus,
+  Pencil,
   RefreshCw,
   Save,
   Settings,
   ShieldCheck,
   Store,
+  Trash2,
+  X,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import { formatCurrency } from '../data/menuData.js';
+import { categories, formatCurrency } from '../data/menuData.js';
 
 const savedAdminKey = 'ecomerce-lanche-admin';
+const maxProductImageBytes = 4 * 1024 * 1024;
 
 const emptyStoreForm = {
   storeName: '',
@@ -34,6 +40,27 @@ const statusOptions = [
   { value: 'OUT_FOR_DELIVERY', label: 'Saiu para entrega' },
   { value: 'DELIVERED', label: 'Entregue' },
   { value: 'CANCELED', label: 'Cancelado' },
+];
+
+const adminSections = [
+  {
+    id: 'orders',
+    label: 'Pedidos',
+    description: 'Status e detalhes',
+    Icon: ClipboardList,
+  },
+  {
+    id: 'products',
+    label: 'Produtos',
+    description: 'Cardapio e imagens',
+    Icon: Store,
+  },
+  {
+    id: 'store',
+    label: 'Loja',
+    description: 'PIX, endereco e taxa',
+    Icon: Settings,
+  },
 ];
 
 function getSavedAdminSession() {
@@ -57,8 +84,65 @@ function formatDate(value) {
 function normalizeProduct(product) {
   return {
     ...product,
+    category: product.category ?? 'tradicionais',
+    description: product.description ?? '',
+    imageUrl: product.imageUrl ?? '',
     priceInput: String(product.price ?? '').replace('.', ','),
   };
+}
+
+function getCategoryName(categoryId) {
+  return categories.find((category) => category.id === categoryId)?.name ?? 'Tradicionais';
+}
+
+function getProductPriceLabel(product) {
+  const price = Number(String(product.priceInput ?? product.price ?? 0).replace(',', '.'));
+  return Number.isFinite(price) ? formatCurrency(price) : formatCurrency(0);
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error('Nao foi possivel ler a imagem.'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function loadImage(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error('Nao foi possivel carregar a imagem.'));
+    image.src = dataUrl;
+  });
+}
+
+async function buildProductImageDataUrl(file) {
+  if (!file) {
+    return '';
+  }
+
+  if (!file.type.startsWith('image/')) {
+    throw new Error('Escolha um arquivo de imagem valido.');
+  }
+
+  if (file.size > maxProductImageBytes) {
+    throw new Error('Escolha uma imagem de ate 4 MB.');
+  }
+
+  const dataUrl = await readFileAsDataUrl(file);
+  const image = await loadImage(dataUrl);
+  const maxSide = 900;
+  const scale = Math.min(1, maxSide / Math.max(image.width, image.height));
+  const width = Math.max(1, Math.round(image.width * scale));
+  const height = Math.max(1, Math.round(image.height * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  canvas.getContext('2d')?.drawImage(image, 0, 0, width, height);
+
+  return canvas.toDataURL('image/jpeg', 0.82);
 }
 
 export default function AdminPage({ apiBaseUrl, onStoreSettingsChange }) {
@@ -72,10 +156,14 @@ export default function AdminPage({ apiBaseUrl, onStoreSettingsChange }) {
   const [storeForm, setStoreForm] = useState(emptyStoreForm);
   const [newProduct, setNewProduct] = useState({
     name: '',
+    category: 'tradicionais',
     price: '',
     description: '',
     imageUrl: '',
   });
+  const [activeAdminSection, setActiveAdminSection] = useState('orders');
+  const [editingProductId, setEditingProductId] = useState(null);
+  const [productPendingRemoval, setProductPendingRemoval] = useState(null);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -158,7 +246,7 @@ export default function AdminPage({ apiBaseUrl, onStoreSettingsChange }) {
       ]);
 
       setOrders(nextOrders);
-      setProducts(nextProducts.map(normalizeProduct));
+      setProducts(nextProducts.filter((product) => product.isAvailable).map(normalizeProduct));
       setStoreForm({
         storeName: settings.storeName ?? '',
         hours: settings.hours ?? '',
@@ -185,6 +273,19 @@ export default function AdminPage({ apiBaseUrl, onStoreSettingsChange }) {
   useEffect(() => {
     loadDashboardData();
   }, [session?.token]);
+
+  useEffect(() => {
+    if (!message && !error) {
+      return undefined;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setMessage('');
+      setError('');
+    }, 4000);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [message, error]);
 
   async function updateOrderStatus(orderId, status) {
     setError('');
@@ -254,6 +355,7 @@ export default function AdminPage({ apiBaseUrl, onStoreSettingsChange }) {
         body: JSON.stringify({
           name: product.name,
           description: product.description,
+          category: product.category,
           imageUrl: product.imageUrl,
           price: product.priceInput,
           isAvailable: product.isAvailable,
@@ -265,12 +367,43 @@ export default function AdminPage({ apiBaseUrl, onStoreSettingsChange }) {
           item.id === product.id ? normalizeProduct(updatedProduct) : item,
         ),
       );
+      setEditingProductId(null);
       setMessage('Produto atualizado.');
     } catch (productError) {
       setError(
         productError instanceof Error
           ? productError.message
           : 'Nao foi possivel atualizar o produto.',
+      );
+    }
+  }
+
+  async function removeProduct(product = productPendingRemoval) {
+    if (!product) {
+      return;
+    }
+
+    setError('');
+    setMessage('');
+
+    try {
+      await request(`/lanches/${product.id}`, {
+        method: 'DELETE',
+        headers: authHeaders,
+      });
+
+      setProducts((currentProducts) =>
+        currentProducts.filter((item) => item.id !== product.id),
+      );
+      setEditingProductId((currentId) => (currentId === product.id ? null : currentId));
+      setProductPendingRemoval(null);
+      setMessage('Produto removido do cardapio.');
+    } catch (productError) {
+      setProductPendingRemoval(null);
+      setError(
+        productError instanceof Error
+          ? productError.message
+          : 'Nao foi possivel remover o produto.',
       );
     }
   }
@@ -294,7 +427,13 @@ export default function AdminPage({ apiBaseUrl, onStoreSettingsChange }) {
         normalizeProduct(createdProduct),
         ...currentProducts,
       ]);
-      setNewProduct({ name: '', price: '', description: '', imageUrl: '' });
+      setNewProduct({
+        name: '',
+        category: 'tradicionais',
+        price: '',
+        description: '',
+        imageUrl: '',
+      });
       setMessage('Produto criado no cardapio.');
     } catch (productError) {
       setError(
@@ -305,9 +444,59 @@ export default function AdminPage({ apiBaseUrl, onStoreSettingsChange }) {
     }
   }
 
+  async function handleProductImageUpload(file, onImageReady) {
+    setError('');
+
+    try {
+      const imageUrl = await buildProductImageDataUrl(file);
+      if (imageUrl) {
+        onImageReady(imageUrl);
+      }
+    } catch (imageError) {
+      setError(
+        imageError instanceof Error
+          ? imageError.message
+          : 'Nao foi possivel adicionar a imagem.',
+      );
+    }
+  }
+
+  const notice = error
+    ? { type: 'error', text: error }
+    : message
+      ? { type: 'success', text: message }
+      : null;
+  const noticeClasses =
+    notice?.type === 'error'
+      ? 'border-red-300 bg-red-50 text-red-700'
+      : 'border-green-300 bg-green-50 text-green-700';
+  const noticeAccentClasses =
+    notice?.type === 'error' ? 'bg-red-600' : 'bg-green-600';
+
   if (!session?.token) {
     return (
       <main className="mx-auto max-w-3xl px-4 py-10">
+        {notice ? (
+          <div className="fixed left-1/2 top-4 z-[300] w-[min(92vw,520px)] -translate-x-1/2">
+            <div className={`overflow-hidden rounded-xl border-2 shadow-2xl ${noticeClasses}`}>
+              <div className={`h-1.5 ${noticeAccentClasses}`} />
+              <div className="flex items-center justify-between gap-3 px-4 py-3 text-sm font-black">
+                <span>{notice.text}</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setError('');
+                    setMessage('');
+                  }}
+                  className="rounded-full p-1 transition hover:bg-black/10"
+                  aria-label="Fechar aviso"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
         <a
           href="#/"
           className="mb-6 inline-flex items-center gap-2 rounded-lg bg-orange-50 px-4 py-2 font-bold text-orange-700 transition hover:bg-orange-100"
@@ -389,12 +578,6 @@ export default function AdminPage({ apiBaseUrl, onStoreSettingsChange }) {
               />
             </div>
 
-            {error && (
-              <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">
-                {error}
-              </p>
-            )}
-
             <button
               disabled={isLoading}
               className="w-full rounded-lg bg-gradient-to-r from-orange-500 to-red-600 py-3 font-bold text-white transition hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-70"
@@ -410,6 +593,27 @@ export default function AdminPage({ apiBaseUrl, onStoreSettingsChange }) {
 
   return (
     <main className="mx-auto max-w-7xl px-4 py-10">
+      {notice ? (
+        <div className="fixed left-1/2 top-4 z-[300] w-[min(92vw,560px)] -translate-x-1/2">
+          <div className={`overflow-hidden rounded-xl border-2 shadow-2xl ${noticeClasses}`}>
+            <div className={`h-1.5 ${noticeAccentClasses}`} />
+            <div className="flex items-center justify-between gap-3 px-4 py-3 text-sm font-black">
+              <span>{notice.text}</span>
+              <button
+                type="button"
+                onClick={() => {
+                  setError('');
+                  setMessage('');
+                }}
+                className="rounded-full p-1 transition hover:bg-black/10"
+                aria-label="Fechar aviso"
+              >
+                <X size={18} />
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <a
           href="#/"
@@ -452,20 +656,43 @@ export default function AdminPage({ apiBaseUrl, onStoreSettingsChange }) {
             <p className="text-slate-600">{session.admin?.email}</p>
           </div>
         </div>
-
-        {message && (
-          <p className="mt-5 rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm font-semibold text-green-700">
-            {message}
-          </p>
-        )}
-        {error && (
-          <p className="mt-5 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">
-            {error}
-          </p>
-        )}
       </section>
 
-      <section className="mb-8 grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
+      <nav className="mb-8 grid gap-3 md:grid-cols-3">
+        {adminSections.map(({ id, label, description, Icon }) => {
+          const isActive = activeAdminSection === id;
+
+          return (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setActiveAdminSection(id)}
+              className={`flex items-center gap-3 rounded-xl border-2 px-4 py-3 text-left font-black uppercase transition ${
+                isActive
+                  ? 'border-slate-950 bg-slate-950 text-white shadow-[5px_5px_0_#ea580c]'
+                  : 'border-orange-200 bg-white text-slate-900 hover:border-slate-950 hover:shadow-[4px_4px_0_#111827]'
+              }`}
+            >
+              <span
+                className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-lg ${
+                  isActive ? 'bg-orange-600 text-white' : 'bg-orange-50 text-orange-600'
+                }`}
+              >
+                <Icon size={22} />
+              </span>
+              <span>
+                <span className="block">{label}</span>
+                <span className={`block text-xs ${isActive ? 'text-orange-100' : 'text-slate-500'}`}>
+                  {description}
+                </span>
+              </span>
+            </button>
+          );
+        })}
+      </nav>
+
+      <section className="mb-8 grid gap-6">
+        {activeAdminSection === 'orders' ? (
         <div className="rounded-2xl border-2 border-orange-200 bg-white p-6 shadow-xl">
           <div className="mb-5 flex items-center gap-3">
             <ClipboardList className="text-orange-600" size={24} />
@@ -514,7 +741,14 @@ export default function AdminPage({ apiBaseUrl, onStoreSettingsChange }) {
                         className="flex items-center justify-between gap-3 rounded-lg bg-white px-3 py-2 text-sm text-slate-700"
                       >
                         <span>
-                          {item.product?.name ?? 'Item'} x{item.quantity}
+                          <span className="block font-semibold">
+                            {item.displayName ?? item.product?.name ?? 'Item'} x{item.quantity}
+                          </span>
+                          {item.customizations ? (
+                            <span className="block text-xs font-semibold text-orange-700">
+                              {item.customizations}
+                            </span>
+                          ) : null}
                         </span>
                         <span className="font-semibold">{formatCurrency(Number(item.total))}</span>
                       </div>
@@ -543,8 +777,11 @@ export default function AdminPage({ apiBaseUrl, onStoreSettingsChange }) {
             </div>
           )}
         </div>
+        ) : null}
 
+        {activeAdminSection === 'store' || activeAdminSection === 'products' ? (
         <div className="space-y-6">
+          {activeAdminSection === 'store' ? (
           <section className="rounded-2xl border-2 border-orange-200 bg-white p-6 shadow-xl">
             <div className="mb-5 flex items-center gap-3">
               <Settings className="text-orange-600" size={24} />
@@ -717,7 +954,9 @@ export default function AdminPage({ apiBaseUrl, onStoreSettingsChange }) {
               </button>
             </div>
           </section>
+          ) : null}
 
+          {activeAdminSection === 'products' ? (
           <section className="rounded-2xl border-2 border-orange-200 bg-white p-6 shadow-xl">
             <div className="mb-5 flex items-center gap-3">
               <PackagePlus className="text-orange-600" size={24} />
@@ -732,6 +971,22 @@ export default function AdminPage({ apiBaseUrl, onStoreSettingsChange }) {
                 className="w-full rounded-lg border-2 border-orange-200 px-4 py-2 focus:outline-none focus:ring-2 focus:ring-orange-500"
                 placeholder="Nome do produto"
               />
+              <select
+                value={newProduct.category}
+                onChange={(event) =>
+                  setNewProduct((product) => ({
+                    ...product,
+                    category: event.target.value,
+                  }))
+                }
+                className="w-full rounded-lg border-2 border-orange-200 bg-white px-4 py-2 focus:outline-none focus:ring-2 focus:ring-orange-500"
+              >
+                {categories.map((category) => (
+                  <option key={category.id} value={category.id}>
+                    {category.name}
+                  </option>
+                ))}
+              </select>
               <input
                 value={newProduct.price}
                 onChange={(event) =>
@@ -751,14 +1006,59 @@ export default function AdminPage({ apiBaseUrl, onStoreSettingsChange }) {
                 className="w-full rounded-lg border-2 border-orange-200 px-4 py-2 focus:outline-none focus:ring-2 focus:ring-orange-500"
                 placeholder="Descricao"
               />
-              <input
-                value={newProduct.imageUrl}
-                onChange={(event) =>
-                  setNewProduct((product) => ({ ...product, imageUrl: event.target.value }))
-                }
-                className="w-full rounded-lg border-2 border-orange-200 px-4 py-2 focus:outline-none focus:ring-2 focus:ring-orange-500"
-                placeholder="URL da imagem"
-              />
+              <div className="rounded-xl border-2 border-dashed border-orange-200 bg-orange-50 p-3">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-white text-orange-600">
+                    {newProduct.imageUrl ? (
+                      <img
+                        src={newProduct.imageUrl}
+                        alt="Previa do produto"
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <ImagePlus size={28} />
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-black text-slate-800">Imagem do produto</p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-sm font-bold text-white transition hover:bg-orange-600">
+                        <ImagePlus size={16} />
+                        Escolher imagem
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(event) => {
+                            const file = event.target.files?.[0];
+                            event.target.value = '';
+                            handleProductImageUpload(file, (imageUrl) =>
+                              setNewProduct((product) => ({
+                                ...product,
+                                imageUrl,
+                              })),
+                            );
+                          }}
+                        />
+                      </label>
+                      {newProduct.imageUrl ? (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setNewProduct((product) => ({
+                              ...product,
+                              imageUrl: '',
+                            }))
+                          }
+                          className="rounded-lg border border-orange-200 px-3 py-2 text-sm font-bold text-slate-700 transition hover:border-red-300 hover:text-red-600"
+                        >
+                          Remover
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              </div>
               <button
                 className="w-full rounded-lg bg-orange-600 py-2 font-bold text-white transition hover:bg-red-600"
                 type="submit"
@@ -767,9 +1067,12 @@ export default function AdminPage({ apiBaseUrl, onStoreSettingsChange }) {
               </button>
             </form>
           </section>
+          ) : null}
         </div>
+        ) : null}
       </section>
 
+      {activeAdminSection === 'products' ? (
       <section className="rounded-2xl border-2 border-orange-200 bg-white p-6 shadow-xl">
         <div className="mb-5 flex items-center gap-3">
           <Store className="text-orange-600" size={24} />
@@ -777,97 +1080,306 @@ export default function AdminPage({ apiBaseUrl, onStoreSettingsChange }) {
         </div>
 
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {products.map((product) => (
-            <article
-              key={product.id}
-              className="rounded-xl border border-orange-100 bg-orange-50 p-4"
-            >
-              <div className="mb-3 flex items-center gap-3">
-                <div className="flex h-14 w-14 items-center justify-center overflow-hidden rounded-lg bg-white text-2xl">
-                  {product.imageUrl ? (
-                    <img
-                      src={product.imageUrl}
-                      alt={product.name}
-                      className="h-full w-full object-cover"
-                      loading="lazy"
-                    />
-                  ) : (
-                    <Store size={22} />
-                  )}
-                </div>
-                <label className="flex items-center gap-2 text-sm font-bold text-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={product.isAvailable}
-                    onChange={(event) =>
-                      setProducts((currentProducts) =>
-                        currentProducts.map((item) =>
-                          item.id === product.id
-                            ? { ...item, isAvailable: event.target.checked }
-                            : item,
-                        ),
-                      )
-                    }
-                  />
-                  Disponivel
-                </label>
-              </div>
+          {products.map((product) => {
+            const isEditing = editingProductId === product.id;
 
-              <div className="space-y-3">
-                <input
-                  value={product.name}
-                  onChange={(event) =>
-                    setProducts((currentProducts) =>
-                      currentProducts.map((item) =>
-                        item.id === product.id
-                          ? { ...item, name: event.target.value }
-                          : item,
-                      ),
-                    )
-                  }
-                  className="w-full rounded-lg border-2 border-orange-200 px-3 py-2 font-semibold focus:outline-none focus:ring-2 focus:ring-orange-500"
-                />
-                <input
-                  value={product.priceInput}
-                  onChange={(event) =>
-                    setProducts((currentProducts) =>
-                      currentProducts.map((item) =>
-                        item.id === product.id
-                          ? { ...item, priceInput: event.target.value }
-                          : item,
-                      ),
-                    )
-                  }
-                  className="w-full rounded-lg border-2 border-orange-200 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-orange-500"
-                  placeholder="Preco"
-                />
-                <input
-                  value={product.imageUrl ?? ''}
-                  onChange={(event) =>
-                    setProducts((currentProducts) =>
-                      currentProducts.map((item) =>
-                        item.id === product.id
-                          ? { ...item, imageUrl: event.target.value }
-                          : item,
-                      ),
-                    )
-                  }
-                  className="w-full rounded-lg border-2 border-orange-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
-                  placeholder="URL da imagem"
-                />
-                <button
-                  onClick={() => saveProduct(product)}
-                  className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-orange-600 px-4 py-2 font-bold text-white transition hover:bg-red-600"
-                  type="button"
-                >
-                  <Save size={18} />
-                  Salvar produto
-                </button>
-              </div>
-            </article>
-          ))}
+            return (
+              <article
+                key={product.id}
+                className="rounded-xl border border-orange-100 bg-orange-50 p-4"
+              >
+                <div className="flex items-start gap-3">
+                  <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-white text-orange-600">
+                    {product.imageUrl ? (
+                      <img
+                        src={product.imageUrl}
+                        alt={product.name}
+                        className="h-full w-full object-cover"
+                        loading="lazy"
+                      />
+                    ) : (
+                      <ImagePlus size={28} />
+                    )}
+                  </div>
+
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <h3 className="break-words text-base font-black text-slate-900">
+                          {product.name}
+                        </h3>
+                        <p className="mt-1 text-sm font-bold text-orange-700">
+                          {getCategoryName(product.category)} - {getProductPriceLabel(product)}
+                        </p>
+                      </div>
+                      <span
+                        className={`shrink-0 rounded-full px-3 py-1 text-xs font-black ${
+                          product.isAvailable
+                            ? 'bg-green-100 text-green-700'
+                            : 'bg-red-100 text-red-700'
+                        }`}
+                      >
+                        {product.isAvailable ? 'Disponivel' : 'Indisponivel'}
+                      </span>
+                    </div>
+
+                    <p className="mt-2 break-words text-sm text-slate-600">
+                      {product.description || 'Sem descricao cadastrada.'}
+                    </p>
+
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setEditingProductId(isEditing ? null : product.id)}
+                        className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-sm font-bold text-white transition hover:bg-orange-600"
+                      >
+                        {isEditing ? <X size={16} /> : <Pencil size={16} />}
+                        {isEditing ? 'Fechar edicao' : 'Editar'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setProductPendingRemoval(product)}
+                        className="inline-flex items-center gap-2 rounded-lg bg-red-50 px-3 py-2 text-sm font-bold text-red-700 transition hover:bg-red-600 hover:text-white"
+                      >
+                        <Trash2 size={16} />
+                        Remover
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {isEditing ? (
+                  <div className="mt-4 space-y-3 border-t border-orange-200 pt-4">
+                    <div className="rounded-xl border-2 border-dashed border-orange-200 bg-white p-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-xs font-bold text-white transition hover:bg-orange-600">
+                          <ImagePlus size={14} />
+                          Trocar imagem
+                          <input
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            onChange={(event) => {
+                              const file = event.target.files?.[0];
+                              event.target.value = '';
+                              handleProductImageUpload(file, (imageUrl) =>
+                                setProducts((currentProducts) =>
+                                  currentProducts.map((item) =>
+                                    item.id === product.id
+                                      ? { ...item, imageUrl }
+                                      : item,
+                                  ),
+                                ),
+                              );
+                            }}
+                          />
+                        </label>
+                        {product.imageUrl ? (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setProducts((currentProducts) =>
+                                currentProducts.map((item) =>
+                                  item.id === product.id
+                                    ? { ...item, imageUrl: '' }
+                                    : item,
+                                ),
+                              )
+                            }
+                            className="rounded-lg border border-orange-200 px-3 py-2 text-xs font-bold text-slate-700 transition hover:border-red-300 hover:text-red-600"
+                          >
+                            Remover imagem
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+
+                    <label className="flex items-center gap-2 text-sm font-bold text-slate-700">
+                      <input
+                        type="checkbox"
+                        checked={product.isAvailable}
+                        onChange={(event) =>
+                          setProducts((currentProducts) =>
+                            currentProducts.map((item) =>
+                              item.id === product.id
+                                ? { ...item, isAvailable: event.target.checked }
+                                : item,
+                            ),
+                          )
+                        }
+                      />
+                      Produto disponivel no cardapio
+                    </label>
+
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div>
+                        <label className="mb-1 block text-xs font-black uppercase tracking-wide text-slate-500">
+                          Nome
+                        </label>
+                        <input
+                          value={product.name}
+                          onChange={(event) =>
+                            setProducts((currentProducts) =>
+                              currentProducts.map((item) =>
+                                item.id === product.id
+                                  ? { ...item, name: event.target.value }
+                                  : item,
+                              ),
+                            )
+                          }
+                          className="w-full rounded-lg border-2 border-orange-200 px-3 py-2 font-semibold focus:outline-none focus:ring-2 focus:ring-orange-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs font-black uppercase tracking-wide text-slate-500">
+                          Categoria
+                        </label>
+                        <select
+                          value={product.category ?? 'tradicionais'}
+                          onChange={(event) =>
+                            setProducts((currentProducts) =>
+                              currentProducts.map((item) =>
+                                item.id === product.id
+                                  ? { ...item, category: event.target.value }
+                                  : item,
+                              ),
+                            )
+                          }
+                          className="w-full rounded-lg border-2 border-orange-200 bg-white px-3 py-2 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                        >
+                          {categories.map((category) => (
+                            <option key={category.id} value={category.id}>
+                              {category.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="mb-1 block text-xs font-black uppercase tracking-wide text-slate-500">
+                        Preco
+                      </label>
+                      <input
+                        value={product.priceInput}
+                        onChange={(event) =>
+                          setProducts((currentProducts) =>
+                            currentProducts.map((item) =>
+                              item.id === product.id
+                                ? { ...item, priceInput: event.target.value }
+                                : item,
+                            ),
+                          )
+                        }
+                        className="w-full rounded-lg border-2 border-orange-200 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                        placeholder="Preco"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="mb-1 block text-xs font-black uppercase tracking-wide text-slate-500">
+                        Descricao
+                      </label>
+                      <textarea
+                        value={product.description ?? ''}
+                        onChange={(event) =>
+                          setProducts((currentProducts) =>
+                            currentProducts.map((item) =>
+                              item.id === product.id
+                                ? { ...item, description: event.target.value }
+                                : item,
+                            ),
+                          )
+                        }
+                        className="min-h-20 w-full rounded-lg border-2 border-orange-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
+                        placeholder="Descricao do produto"
+                      />
+                    </div>
+
+                    <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+                      <button
+                        onClick={() => saveProduct(product)}
+                        className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-orange-600 px-4 py-2 font-bold text-white transition hover:bg-red-600"
+                        type="button"
+                      >
+                        <Save size={18} />
+                        Salvar alteracoes
+                      </button>
+                      <button
+                        onClick={() => setProductPendingRemoval(product)}
+                        className="inline-flex items-center justify-center gap-2 rounded-lg bg-red-50 px-4 py-2 font-bold text-red-700 transition hover:bg-red-600 hover:text-white"
+                        type="button"
+                      >
+                        <Trash2 size={18} />
+                        Remover
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+              </article>
+            );
+          })}
         </div>
       </section>
+      ) : null}
+
+      {productPendingRemoval ? (
+        <div className="fixed inset-0 z-[280] flex items-center justify-center bg-slate-950/75 p-4">
+          <section className="w-full max-w-lg overflow-hidden rounded-2xl border-2 border-orange-500 bg-slate-950 text-white shadow-[10px_10px_0_#ea580c]">
+            <div className="border-b border-orange-500/40 bg-[linear-gradient(135deg,#111827_0%,#111827_60%,#7c2d12_100%)] p-5">
+              <div className="flex items-start gap-4">
+                <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-orange-600 text-white shadow-[4px_4px_0_#111827]">
+                  <AlertTriangle size={30} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-black uppercase tracking-[0.28em] text-orange-300">
+                    Confirmar remocao
+                  </p>
+                  <h2 className="mt-1 break-words text-2xl font-black uppercase">
+                    Tirar do cardapio?
+                  </h2>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setProductPendingRemoval(null)}
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/10 text-white transition hover:bg-white/20"
+                  aria-label="Fechar confirmacao"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-5 p-5">
+              <div className="rounded-xl border border-orange-500/40 bg-white/5 p-4">
+                <p className="break-words text-lg font-black text-orange-200">
+                  {productPendingRemoval.name}
+                </p>
+                <p className="mt-2 text-sm text-slate-300">
+                  Esse produto some do cardapio do cliente, mas os pedidos antigos continuam guardados.
+                </p>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={() => setProductPendingRemoval(null)}
+                  className="rounded-xl border-2 border-white/20 px-4 py-3 font-black uppercase text-white transition hover:bg-white/10"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => removeProduct()}
+                  className="rounded-xl border-2 border-red-500 bg-red-600 px-4 py-3 font-black uppercase text-white shadow-[4px_4px_0_#7f1d1d] transition hover:bg-red-700"
+                >
+                  Remover produto
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </main>
   );
 }

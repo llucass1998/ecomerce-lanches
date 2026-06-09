@@ -8,6 +8,7 @@ import { getIdParam } from '../utils/request.js';
 import { normalizeText, parseMoney } from '../utils/normalize.js';
 
 export const productRoutes = Router();
+const defaultCategory = 'tradicionais';
 
 // Lista todos os lanches cadastrados, mais novos primeiro.
 productRoutes.get(
@@ -51,6 +52,7 @@ productRoutes.post(
   asyncHandler(async (req, res) => {
     const name = normalizeText(req.body.name);
     const description = normalizeText(req.body.description) || null;
+    const category = normalizeText(req.body.category) || defaultCategory;
     const imageUrl = normalizeText(req.body.imageUrl) || null;
     const price = parseMoney(req.body.price);
 
@@ -67,6 +69,7 @@ productRoutes.post(
       data: {
         name,
         description,
+        category,
         imageUrl,
         price,
         isAvailable:
@@ -126,6 +129,10 @@ productRoutes.put(
 
     if (req.body.description !== undefined) {
       data.description = normalizeText(req.body.description) || null;
+    }
+
+    if (req.body.category !== undefined) {
+      data.category = normalizeText(req.body.category) || defaultCategory;
     }
 
     if (req.body.imageUrl !== undefined) {
